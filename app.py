@@ -73,8 +73,7 @@ st.markdown("""
 def load_visual_data():
     if os.path.exists("sample.csv"):
         df = pd.read_csv("sample.csv")
-        # تنظيف سريع للعينة لضمان سلامة الرسم
-        return df[(df['passenger_count'] > 0) & (df['trip_distance'] > 0) & (df['fare_amount'] >= 2.5)].copy()
+return df[(df['passenger_count'] > 0) & (df['trip_distance'] > 0) & (df['trip_distance'] < 100) & (df['fare_amount'] >= 2.5) & (df['fare_amount'] < 300)].copy()
     return pd.DataFrame()
 
 pandas_sample = load_visual_data()
