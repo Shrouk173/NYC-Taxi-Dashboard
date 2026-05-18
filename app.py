@@ -80,23 +80,31 @@ st.markdown("""
 def load_parquet_trees():
     dt_dict, rf_dicts = None, []
     
-    # قراءة Decision Tree ديناميكياً
+    # 1️⃣ قراءة Decision Tree (مفرودة جاهزة من سبارك)
     dt_files = glob.glob(os.path.join("model_dt", "stages", "*DecisionTree*", "data", "*.parquet"))
     if dt_files:
         dt_df = pd.read_parquet(dt_files[0])
-        # حماية: لو سبارك مسميها nodeID نقلبها لـ id
         if 'nodeID' in dt_df.columns:
             dt_df = dt_df.rename(columns={'nodeID': 'id'})
         dt_dict = dt_df.set_index('id')[['prediction', 'leftChild', 'rightChild', 'split']].to_dict('index')
         
-    # قراءة Random Forest ديناميكياً
+    # 2️⃣ قراءة Random Forest (هنا بنفك الـ Nested Struct)
     rf_files = glob.glob(os.path.join("model_rf", "stages", "*RandomForest*", "data", "*.parquet"))
     if rf_files:
         rf_df = pd.read_parquet(rf_files[0])
-        # حماية: في الـ Random Forest غالباً بتبقى nodeID، هنوحدها لـ id
+        
+        # السحر هنا: لو البيانات مدفونة جوه nodeData، بنفردها لأعمدة مستقلة
+        if 'nodeData' in rf_df.columns:
+            # تحويل الـ struct لـ columns منفصلة
+            node_data_df = pd.json_normalize(rf_df['nodeData'])
+            # دمج الـ treeID مع الأعمدة الجديدة المفرودة
+            rf_df = pd.concat([rf_df['treeID'].reset_index(drop=True), node_data_df.reset_index(drop=True)], axis=1)
+        
+        # حماية إضافية لتوحيد المسميات
         if 'nodeID' in rf_df.columns:
             rf_df = rf_df.rename(columns={'nodeID': 'id'})
             
+        # بناء القواميس للـ 50 شجرة كاملة بنجاح
         for t_id in rf_df['treeID'].unique():
             tree_data = rf_df[rf_df['treeID'] == t_id]
             rf_dicts.append(tree_data.set_index('id')[['prediction', 'leftChild', 'rightChild', 'split']].to_dict('index'))
