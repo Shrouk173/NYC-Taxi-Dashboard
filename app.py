@@ -84,12 +84,19 @@ def load_parquet_trees():
     dt_files = glob.glob(os.path.join("model_dt", "stages", "*DecisionTree*", "data", "*.parquet"))
     if dt_files:
         dt_df = pd.read_parquet(dt_files[0])
+        # حماية: لو سبارك مسميها nodeID نقلبها لـ id
+        if 'nodeID' in dt_df.columns:
+            dt_df = dt_df.rename(columns={'nodeID': 'id'})
         dt_dict = dt_df.set_index('id')[['prediction', 'leftChild', 'rightChild', 'split']].to_dict('index')
         
     # قراءة Random Forest ديناميكياً
     rf_files = glob.glob(os.path.join("model_rf", "stages", "*RandomForest*", "data", "*.parquet"))
     if rf_files:
         rf_df = pd.read_parquet(rf_files[0])
+        # حماية: في الـ Random Forest غالباً بتبقى nodeID، هنوحدها لـ id
+        if 'nodeID' in rf_df.columns:
+            rf_df = rf_df.rename(columns={'nodeID': 'id'})
+            
         for t_id in rf_df['treeID'].unique():
             tree_data = rf_df[rf_df['treeID'] == t_id]
             rf_dicts.append(tree_data.set_index('id')[['prediction', 'leftChild', 'rightChild', 'split']].to_dict('index'))
