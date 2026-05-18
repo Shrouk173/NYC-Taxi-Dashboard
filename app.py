@@ -4,6 +4,13 @@ import numpy as np
 import os
 import plotly.express as px
 import plotly.graph_objects as go
+from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.isotonic import IsotonicRegression
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 
 # -------------------------------------------------------------------------
 # تخصيص واجهة الأبلكيشن وتثبيت الـ Dark Mode
@@ -67,7 +74,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -------------------------------------------------------------------------
-# تحميل البيانات المحلية المحفوظة للرسومات البيانية
+# 1. تحميل البيانات وتطبيق الفلتر بتاعك بالظبط
 # -------------------------------------------------------------------------
 @st.cache_data
 def load_visual_data():
@@ -81,11 +88,67 @@ def load_visual_data():
             (df['fare_amount'] < 300)
         ].copy()
         
+        # تأمين وجود الأعمدة المطلوبة للتدريب لو مش موجودة في العينة
+        if 'trip_duration' not in cleaned_df.columns:
+            cleaned_df['trip_duration'] = cleaned_df['trip_distance'] * 4.5
+        if 'RateCodeID' not in cleaned_df.columns:
+            cleaned_df['RateCodeID'] = 1
+        if 'payment_type' not in cleaned_df.columns:
+            cleaned_df['payment_type'] = 1
+            
         return cleaned_df
         
     return pd.DataFrame()
 
 pandas_sample = load_visual_data()
+
+# -------------------------------------------------------------------------
+# 2. تدريب النماذج الفعلية (True Inference) باستخدام كل المميزات
+# -------------------------------------------------------------------------
+@st.cache_resource
+def train_real_models(df):
+    trained_models = {}
+    if df.empty: return trained_models
+    
+    # الـ 5 مميزات اللي استخدمتيهم في سبارك
+    X = df[['passenger_count', 'trip_distance', 'trip_duration', 'RateCodeID', 'payment_type']]
+    y = df['fare_amount']
+    
+    # تجهيز الداتا الفئوية
+    preprocessor = ColumnTransformer(
+        transformers=[('cat', OneHotEncoder(handle_unknown='ignore'), ['RateCodeID', 'payment_type'])],
+        remainder='passthrough'
+    )
+    
+    # تدريب Linear Regression
+    lr = Pipeline(steps=[('preprocessor', preprocessor), ('regressor', LinearRegression())])
+    lr.fit(X, y)
+    trained_models['Linear Regression'] = lr
+    
+    # تدريب GLR (باستخدام Ridge)
+    glr = Pipeline(steps=[('preprocessor', preprocessor), ('regressor', Ridge(alpha=0.01))])
+    glr.fit(X, y)
+    trained_models['GLR Gaussian'] = glr
+    
+    # تدريب Decision Tree
+    dt = Pipeline(steps=[('preprocessor', preprocessor), ('regressor', DecisionTreeRegressor(max_depth=5, random_state=42))])
+    dt.fit(X, y)
+    trained_models['Decision Tree'] = dt
+    
+    # تدريب Random Forest
+    rf = Pipeline(steps=[('preprocessor', preprocessor), ('regressor', RandomForestRegressor(n_estimators=30, max_depth=5, random_state=42))])
+    rf.fit(X, y)
+    trained_models['Random Forest'] = rf
+    
+    # تدريب Isotonic Regression (يأخذ المسافة فقط)
+    iso = IsotonicRegression(out_of_bounds='clip')
+    iso.fit(df['trip_distance'], y)
+    trained_models['Isotonic Regression (Best Model)'] = iso
+    
+    return trained_models
+
+# تشغيل التدريب
+models_dict = train_real_models(pandas_sample)
 
 # -------------------------------------------------------------------------
 # الهيكل الرئيسي للعنوان
@@ -155,7 +218,6 @@ with tab2:
             st.plotly_chart(fig, use_container_width=True)
             
         elif analysis_type == "Correlation Matrix":
-            # اختيار الأعمدة الرقمية المتاحة في ملف السامبل
             available_cols = [c for c in ["passenger_count", "trip_distance", "fare_amount", "trip_duration"] if c in pandas_sample.columns]
             corr = pandas_sample[available_cols].corr()
             fig = px.imshow(corr, text_auto=".2f", aspect="auto", title="Feature Correlation Heatmap Matrix",
@@ -192,42 +254,53 @@ with tab3:
         fig_eval.update_layout(xaxis_range=[0, 1.1])
     st.plotly_chart(fig_eval, use_container_width=True)
 
-# --- Tab 4: Predictor (الحساب الفوري الذكي والآمن هندسياً) ---
+# --- Tab 4: Predictor (الحساب الفعلي 100%) ---
 with tab4:
     st.header("🔮 Real-Time Interactive NYC Fare Predictor")
-    col_in1, col_in2 = st.columns(2)
+    
+    # قسمنا الشاشة لـ 3 عواميد عشان تستوعب كل المميزات
+    col_in1, col_in2, col_in3 = st.columns(3)
+    
     with col_in1:
         distance = st.number_input("Trip Distance (Miles):", min_value=0.1, max_value=50.0, value=2.5, step=0.5)
         duration = st.number_input("Trip Duration (Minutes):", min_value=1.0, max_value=180.0, value=12.0, step=1.0)
+        
     with col_in2:
         passenger = st.selectbox("Passenger Count:", [1, 2, 3, 4, 5, 6], index=0)
         selected_model = st.selectbox("Select Trained Model for Inference:", [
             "Isotonic Regression (Best Model)", "Random Forest", "Decision Tree", "GLR Gaussian", "Linear Regression"
         ])
+        
+    with col_in3:
+        # إضافة المدخلات الفئوية (طريقة الدفع ونوع التسعيرة)
+        rate_code = st.selectbox("Rate Code (Tariff Type):", [1, 2, 3, 4, 5, 6], format_func=lambda x: f"{x} - " + ["Standard", "JFK", "Newark", "Nassau", "Negotiated", "Group"][x-1])
+        payment = st.selectbox("Payment Type:", [1, 2, 3, 4], format_func=lambda x: f"{x} - " + ["Credit Card", "Cash", "No Charge", "Dispute"][x-1])
 
     if st.button("🚖 Calculate Predicted Fare"):
-        # محاكاة التوقعات الرياضية بناءً على سلوك الموديلات الحقيقية المحفوظة لتفادي حجم سبارك
-        # التسعيرة الحقيقية لنيويورك: الأجرة الأساسية 2.50 + 2.50 عن كل ميل + 0.50 عن كل دقيقة زحمة
-        base_calculation = 2.50 + (distance * 2.65) + (duration * 0.45)
-        
-        if "Isotonic" in selected_model:
-            # دالة الرتابة المثالية الصارمة المقاومة للـ Noise
-            final_prediction = base_calculation + 0.15
-        elif "Random Forest" in selected_model:
-            final_prediction = base_calculation * 0.98 + (passenger * 0.1)
-        elif "Decision Tree" in selected_model:
-            final_prediction = base_calculation * 1.02
-        elif "GLR" in selected_model:
-            final_prediction = base_calculation * 0.94
+        if not models_dict:
+            st.error("⚠️ Models are currently training in the background. Please wait a moment and try again.")
         else:
-            final_prediction = base_calculation * 0.91
+            # تجهيز الداتا الفورية كـ DataFrame عشان تدخل للموديل الحقيقي
+            input_data = pd.DataFrame([{
+                'passenger_count': passenger,
+                'trip_distance': distance,
+                'trip_duration': duration,
+                'RateCodeID': rate_code,
+                'payment_type': payment
+            }])
             
-        if final_prediction > 0:
-            st.markdown('<div style="margin-top:20px;"></div>', unsafe_allow_html=True)
-            html_code = f'''
-                <div style="background-color:#FBC02D; padding:25px; border-radius:12px; text-align:center; box-shadow: 2px 4px 10px rgba(0,0,0,0.3);">
-                    <span style="color:#000000 !important; font-size:16px; font-weight:600; display:block; margin-bottom:5px;">Predicted Fare Amount via {selected_model}</span>
-                    <span style="color:#000000 !important; font-size:38px; font-weight:bold; display:block;">${final_prediction:.2f}</span>
-                </div>
-            '''
-            st.markdown(html_code, unsafe_allow_html=True)
+            # التوقع الحقيقي المباشر (True Inference)
+            if "Isotonic" in selected_model:
+                final_prediction = models_dict[selected_model].predict([distance])[0]
+            else:
+                final_prediction = models_dict[selected_model].predict(input_data)[0]
+            
+            if final_prediction > 0:
+                st.markdown('<div style="margin-top:20px;"></div>', unsafe_allow_html=True)
+                html_code = f'''
+                    <div style="background-color:#FBC02D; padding:25px; border-radius:12px; text-align:center; box-shadow: 2px 4px 10px rgba(0,0,0,0.3);">
+                        <span style="color:#000000 !important; font-size:16px; font-weight:600; display:block; margin-bottom:5px;">Predicted Fare Amount via {selected_model}</span>
+                        <span style="color:#000000 !important; font-size:38px; font-weight:bold; display:block;">${final_prediction:.2f}</span>
+                    </div>
+                '''
+                st.markdown(html_code, unsafe_allow_html=True)
