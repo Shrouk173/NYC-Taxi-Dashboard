@@ -80,7 +80,7 @@ st.markdown("""
 def load_parquet_trees():
     dt_dict, rf_dicts = None, []
     
-    # 1️⃣ قراءة Decision Tree (مفرودة جاهزة من سبارك)
+    # 1️⃣ قراءة الـ Decision Tree 
     dt_files = glob.glob(os.path.join("model_dt", "stages", "*DecisionTree*", "data", "*.parquet"))
     if dt_files:
         dt_df = pd.read_parquet(dt_files[0])
@@ -88,23 +88,33 @@ def load_parquet_trees():
             dt_df = dt_df.rename(columns={'nodeID': 'id'})
         dt_dict = dt_df.set_index('id')[['prediction', 'leftChild', 'rightChild', 'split']].to_dict('index')
         
-    # 2️⃣ قراءة Random Forest (هنا بنفك الـ Nested Struct)
+    # 2️⃣ قراءة الـ Random Forest وإعادة بناء الـ Split Object يدوياً
     rf_files = glob.glob(os.path.join("model_rf", "stages", "*RandomForest*", "data", "*.parquet"))
     if rf_files:
         rf_df = pd.read_parquet(rf_files[0])
         
-        # السحر هنا: لو البيانات مدفونة جوه nodeData، بنفردها لأعمدة مستقلة
         if 'nodeData' in rf_df.columns:
-            # تحويل الـ struct لـ columns منفصلة
+            # تفريغ الـ Struct الداخلي
             node_data_df = pd.json_normalize(rf_df['nodeData'])
-            # دمج الـ treeID مع الأعمدة الجديدة المفرودة
+            
+            # إعادة بناء عمود الـ split كـ Dictionary متوافق مع خوارزمية التتبع
+            node_data_df['split'] = node_data_df.apply(
+                lambda row: {
+                    'featureIndex': int(row['split.featureIndex']) if pd.notna(row['split.featureIndex']) else -1,
+                    'leftCategoriesOrThreshold': list(row['split.leftCategoriesOrThreshold']) if isinstance(row['split.leftCategoriesOrThreshold'], (list, np.ndarray)) else [],
+                    'numCategories': int(row['split.numCategories']) if pd.notna(row['split.numCategories']) else -1
+                } if pd.notna(row['split.featureIndex']) else None,
+                axis=1
+            )
+            
+            # دمج الـ treeID مع أعمدة البيانات المفرودة والمعدلة
             rf_df = pd.concat([rf_df['treeID'].reset_index(drop=True), node_data_df.reset_index(drop=True)], axis=1)
         
-        # حماية إضافية لتوحيد المسميات
+        # توحيد مسمى المعرف لـ id
         if 'nodeID' in rf_df.columns:
             rf_df = rf_df.rename(columns={'nodeID': 'id'})
             
-        # بناء القواميس للـ 50 شجرة كاملة بنجاح
+        # بناء قواميس الـ 50 شجرة بالهيكل النظيف المتطابق
         for t_id in rf_df['treeID'].unique():
             tree_data = rf_df[rf_df['treeID'] == t_id]
             rf_dicts.append(tree_data.set_index('id')[['prediction', 'leftChild', 'rightChild', 'split']].to_dict('index'))
